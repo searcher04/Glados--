@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, call, patch
 
-from checkin import Checker, CheckinResult, CheckinStatus, main
+from checkin import API, Checker, CheckinResult, CheckinStatus, Config, main
 
 
 class DummyConfig:
@@ -15,7 +15,7 @@ class DummyConfig:
 class QuietTestCase(unittest.TestCase):
     def setUp(self):
         self.logger_patch = patch("checkin.logger")
-        self.logger_patch.start()
+        self.logger = self.logger_patch.start()
         self.addCleanup(self.logger_patch.stop)
 
 
@@ -214,6 +214,7 @@ class ExchangeThresholdTests(QuietTestCase):
     def test_skips_exchange_below_threshold(self):
         result, api = self.run_with_points("31 积分", 31)
 
+        self.assertEqual("1", result.points)
         self.assertEqual("积分不足，跳过兑换 (31/500)", result.exchange)
         api.exchange.assert_not_called()
 
@@ -233,6 +234,40 @@ class ExchangeThresholdTests(QuietTestCase):
 
         self.assertEqual("积分查询失败，跳过兑换", result.exchange)
         api.exchange.assert_not_called()
+
+
+class ConfigLoggingTests(QuietTestCase):
+    def test_empty_optional_values_use_defaults_without_warnings(self):
+        environment = {
+            "GLADOS_COOKIES": "cookie-1",
+            "PUSHDEER_SENDKEY": "",
+            "GLADOS_EXCHANGE_PLAN": "",
+            "GLADOS_VERBOSE": "",
+        }
+
+        with patch.dict("os.environ", environment, clear=True):
+            config = Config()
+
+        self.assertEqual("", config.push_key)
+        self.assertEqual("plan500", config.exchange_plan)
+        self.assertFalse(config.verbose)
+        self.logger.warning.assert_not_called()
+
+
+class RequestLoggingTests(QuietTestCase):
+    def test_http_error_does_not_log_response_body(self):
+        api = API("glados.cloud")
+        response = MagicMock()
+        response.ok = False
+        response.status_code = 403
+        response.text = "sensitive response body"
+
+        with patch.object(api.session, "get", return_value=response):
+            result = api._make_request("https://glados.cloud/api/test", "GET", cookies="cookie-1")
+
+        self.assertIsNone(result)
+        self.assertNotIn("sensitive response body", repr(self.logger.method_calls))
+        api.close()
 
 
 if __name__ == "__main__":
