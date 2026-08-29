@@ -425,32 +425,58 @@ class Checker:
         if self.config.verbose or force:
             logger.info(f"{LogEmoji.COOKIE}[{cookie_idx}] {LogEmoji.DOMAIN}[{domain}] {emoji} {message}")
 
-    def checkin_all(self):
-        """执行所有签到任务"""
+    def checkin_all(self) -> None:
+        """为每个 Cookie 找到可用域名并执行一次签到。"""
         cookie_count = len(self.config.cookies_list)
         domain_count = len(self.config.DOMAINS)
-        total_tasks = cookie_count * domain_count
-        task_idx = 0
 
-        logger.info(f"{LogEmoji.INFO} 共 {cookie_count} 个 Cookie, {domain_count} 个域名, 共 {total_tasks} 个任务")
+        if not self.config.DOMAINS:
+            raise ValueError("未配置可用域名。")
+
+        logger.info(f"{LogEmoji.INFO} 共 {cookie_count} 个 Cookie, 每个 Cookie 最多尝试 {domain_count} 个域名")
 
         for cookie_idx, cookie in enumerate(self.config.cookies_list, 1):
-            logger.info(f"{LogEmoji.START} ========== 开始处理 Cookie {cookie_idx} ==========")
+            logger.info(f"{LogEmoji.START} ========== 开始处理 Cookie {cookie_idx}/{cookie_count} ==========")
 
-            for domain in self.config.DOMAINS:
-                task_idx += 1
-                logger.info(f"{LogEmoji.INFO} ----- 任务 {task_idx}/{total_tasks}: {LogEmoji.COOKIE}[{cookie_idx}] on {LogEmoji.DOMAIN}[{domain}] -----")
+            result = self._checkin_cookie(cookie, cookie_idx)
+            self.results.append(result)
+            self._log_result(result)
 
-                result = self._checkin_on_domain(cookie, cookie_idx, domain)
-                self.results.append(result)
+    def _checkin_cookie(self, cookie: str, cookie_idx: int) -> CheckinResult:
+        """依次尝试域名，成功或重复签到后立即停止。"""
+        last_result = CheckinResult(cookie_idx, self.config.DOMAINS[0])
+        domain_count = len(self.config.DOMAINS)
 
-                result_message = f"结果: {result.status}"
-                if result.code == CheckinStatus.SUCCESS:
-                    if self.config.verbose:
-                        result_message = f"结果: {result.status}, 获得 {result.points} 积分, 剩余 {result.days}, 总 {result.points_total}, {result.exchange}"
-                    self._log(cookie_idx, domain, LogEmoji.SUCCESS, result_message, force=True)
-                else:
-                    self._log(cookie_idx, domain, LogEmoji.WARNING, result_message, force=True)
+        for domain_idx, domain in enumerate(self.config.DOMAINS, 1):
+            logger.info(
+                f"{LogEmoji.INFO} ----- {LogEmoji.COOKIE}[{cookie_idx}] "
+                f"尝试域名 {domain_idx}/{domain_count}: {LogEmoji.DOMAIN}[{domain}] -----"
+            )
+
+            last_result = self._checkin_on_domain(cookie, cookie_idx, domain)
+            if last_result.code in (CheckinStatus.SUCCESS, CheckinStatus.REPEAT):
+                if domain_idx > 1:
+                    self._log(cookie_idx, domain, LogEmoji.SUCCESS, "已切换到可用域名", force=True)
+                return last_result
+
+            if domain_idx < domain_count:
+                self._log(cookie_idx, domain, LogEmoji.WARNING, "当前域名不可用，尝试下一个", force=True)
+
+        return last_result
+
+    def _log_result(self, result: CheckinResult) -> None:
+        """记录一个 Cookie 的最终结果。"""
+        result_message = f"结果: {result.status}"
+        if result.code == CheckinStatus.SUCCESS:
+            if self.config.verbose:
+                result_message = (
+                    f"结果: {result.status}, 获得 {result.points} 积分, "
+                    f"剩余 {result.days}, 总 {result.points_total}, {result.exchange}"
+                )
+            self._log(result.cookie_index, result.domain, LogEmoji.SUCCESS, result_message, force=True)
+            return
+
+        self._log(result.cookie_index, result.domain, LogEmoji.WARNING, result_message, force=True)
 
     def _checkin_on_domain(self, cookie: str, cookie_idx: int, domain: str) -> CheckinResult:
         result = CheckinResult(cookie_idx, domain)
@@ -461,11 +487,18 @@ class Checker:
             days_str, status_code = api.get_status(cookie)
             result.days = days_str
 
+            if status_code == CheckinStatus.FAILURE.value:
+                result.status = "当前域名不可用"
+                return result
+
             # 2. 签到
             self._log(cookie_idx, domain, LogEmoji.CHECKIN, "执行签到")
             checkin_result = api.checkin(cookie)
             result.status = checkin_result["status"]
             result.code = checkin_result.get("code", CheckinStatus.FAILURE)
+
+            if result.code == CheckinStatus.FAILURE:
+                return result
 
             # 3. 获取积分
             self._log(cookie_idx, domain, LogEmoji.POINTS, "查询总积分")
