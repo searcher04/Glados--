@@ -327,7 +327,7 @@ class API:
             return "None 天", -2
 
     @log_method
-    def get_points(self, cookies: str) -> Tuple[str, int]:
+    def get_points(self, cookies: str) -> Tuple[str, Optional[int]]:
         """获取积分"""
         url = self._get_full_url(self.POINTS_URL)
         response = self._make_request(url, "GET", cookies=cookies)
@@ -345,13 +345,13 @@ class API:
                 return points_str, points_num
             else:
                 self._log("info", LogEmoji.FAIL, f"{{ code : {code}, points : {points} 积分}}", force=True)
-                return "None 积分", 0
+                return "None 积分", None
         else:
             self._log("warning", LogEmoji.WARNING, "获取积分失败", force=True)
-            return "None 积分", 0
+            return "None 积分", None
 
     @log_method
-    def exchange(self, cookies: str, plan: str, required_points: int) -> str:
+    def exchange(self, cookies: str, plan: str) -> str:
         """执行兑换"""
         url = self._get_full_url(self.EXCHANGE_URL)
         response = self._make_request(url, "POST", {"planType": plan}, cookies)
@@ -506,15 +506,22 @@ class Checker:
             points_str, points_num = api.get_points(cookie)
             result.points_total = points_str
 
-            # 4. 执行兑换
+            # 4. 积分达到所选计划门槛时才执行兑换
             required_points = self.config.EXCHANGE_PLANS.get(self.config.exchange_plan, 500)
-            self._log(
-                cookie_idx,
-                domain,
-                LogEmoji.EXCHANGE,
-                f"开始兑换 {self.config.exchange_plan} (需要 {required_points} 积分)",
-            )
-            result.exchange = api.exchange(cookie, self.config.exchange_plan, required_points)
+            if points_num is None:
+                result.exchange = "积分查询失败，跳过兑换"
+                self._log(cookie_idx, domain, LogEmoji.WARNING, result.exchange, force=True)
+            elif points_num < required_points:
+                result.exchange = f"积分不足，跳过兑换 ({points_num}/{required_points})"
+                self._log(cookie_idx, domain, LogEmoji.INFO, result.exchange, force=True)
+            else:
+                self._log(
+                    cookie_idx,
+                    domain,
+                    LogEmoji.EXCHANGE,
+                    f"开始兑换 {self.config.exchange_plan} (需要 {required_points} 积分)",
+                )
+                result.exchange = api.exchange(cookie, self.config.exchange_plan)
 
         return result
 
