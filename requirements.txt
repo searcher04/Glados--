@@ -1,0 +1,2 @@
+pypushdeer==0.0.3
+requests==2.34.2
