@@ -467,13 +467,14 @@ class Checker:
     def _log_result(self, result: CheckinResult) -> None:
         """记录一个 Cookie 的最终结果。"""
         result_message = f"结果: {result.status}"
-        if result.code == CheckinStatus.SUCCESS:
+        if result.code in (CheckinStatus.SUCCESS, CheckinStatus.REPEAT):
             if self.config.verbose:
                 result_message = (
                     f"结果: {result.status}, 获得 {result.points} 积分, "
                     f"剩余 {result.days}, 总 {result.points_total}, {result.exchange}"
                 )
-            self._log(result.cookie_index, result.domain, LogEmoji.SUCCESS, result_message, force=True)
+            emoji = LogEmoji.SUCCESS if result.code == CheckinStatus.SUCCESS else LogEmoji.REPEAT
+            self._log(result.cookie_index, result.domain, emoji, result_message, force=True)
             return
 
         self._log(result.cookie_index, result.domain, LogEmoji.WARNING, result_message, force=True)
@@ -521,6 +522,10 @@ class Checker:
         """获取所有结果"""
         return [result.to_dict() for result in self.results]
 
+    def has_failures(self) -> bool:
+        """是否存在真正的签到失败。"""
+        return any(result.code == CheckinStatus.FAILURE for result in self.results)
+
     def format_results(self) -> Tuple[str, str, str]:
         """格式化结果"""
         results = self.get_results()
@@ -552,8 +557,13 @@ class Checker:
 logger = init_logger()
 
 
-def main():
-    """主函数"""
+def main() -> int:
+    """执行签到，并返回给 GitHub Actions 使用的退出状态。"""
+    config: Optional[Config] = None
+    exit_code = 0
+    title = "# 签到未执行"
+    content = ""
+
     try:
         # 1. 加载配置
         logger.info(f"{LogEmoji.START} 步骤 1: 加载配置")
@@ -562,27 +572,37 @@ def main():
         if not config.cookies_list:
             logger.error(f"{LogEmoji.ERROR} 未找到有效的 Cookie, 退出程序。")
             title, content = "# 未找到 cookies!", ""
+            exit_code = 1
         else:
             # 2. 执行签到
             logger.info(f"{LogEmoji.START} 步骤 2: 执行签到")
             checker = Checker(config)
             checker.checkin_all()
-
             # 3. 格式化结果
             logger.info(f"{LogEmoji.START} 步骤 3: 格式化结果")
             title, content, log_content = checker.format_results()
             logger.info(f"\n{LogEmoji.END}========== 签到总结 ==========\n{title}\n{log_content}")
+            exit_code = 1 if checker.has_failures() else 0
 
     except Exception as e:
         logger.error(f"{LogEmoji.ERROR} 主程序执行过程中发生未预期的错误: {e}")
-        title, content, log_content = "# 脚本执行出错", str(e), str(e)
+        title, content = "# 脚本执行出错", str(e)
+        exit_code = 1
 
     # 4. 发送推送
     logger.info(f"{LogEmoji.START} 步骤 4: 发送推送")
-    push_service = PushService(config if "config" in locals() else "")
-    push_service.send(title, content)
+    if config is not None:
+        push_service = PushService(config)
+        push_service.send(title, content)
+    else:
+        logger.warning(f"{LogEmoji.WARNING} 配置加载失败，跳过推送通知。")
+
+    if exit_code:
+        logger.error(f"{LogEmoji.ERROR} 检测到签到失败，GitHub Actions 将显示失败。")
+
     logger.info(f"{LogEmoji.END} 签到完成")
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
