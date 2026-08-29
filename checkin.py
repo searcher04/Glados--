@@ -130,7 +130,7 @@ class Config:
         verbose_env: Optional[str] = os.environ.get(self.ENV_VERBOSE)
 
         if not push_key_env:
-            logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_PUSH_KEY}' 未设置。")
+            logger.info(f"{LogEmoji.INFO} 未设置 '{self.ENV_PUSH_KEY}'，将跳过推送通知。")
             self.push_key = ""
         else:
             self.push_key = push_key_env
@@ -144,7 +144,7 @@ class Config:
                 raise ValueError(f"环境变量 '{self.ENV_COOKIES}' 已设置，但未包含任何有效的 Cookie。")
 
         if not exchange_plan_env:
-            logger.warning(f"{LogEmoji.WARNING} 环境变量 '{self.ENV_EXCHANGE_PLAN}' 未设置，将使用默认兑换计划 {self.DEFAULT_EXCHANGE_PLAN}。")
+            logger.info(f"{LogEmoji.INFO} 未设置 '{self.ENV_EXCHANGE_PLAN}'，使用默认兑换计划 {self.DEFAULT_EXCHANGE_PLAN}。")
             self.exchange_plan = self.DEFAULT_EXCHANGE_PLAN
         else:
             if exchange_plan_env in self.EXCHANGE_PLANS:
@@ -158,8 +158,8 @@ class Config:
         logger.info(f"{LogEmoji.INFO} 当前 {self.ENV_PUSH_KEY} {'已设置' if push_key_env else '未设置'}。")
         logger.info(f"{LogEmoji.INFO} 当前 {self.ENV_EXCHANGE_PLAN}: {self.exchange_plan}。")
 
-        if verbose_env is not None:
-            verbose_env_lower = verbose_env.lower()
+        if verbose_env and verbose_env.strip():
+            verbose_env_lower = verbose_env.strip().lower()
             if verbose_env_lower in ["true", "1", "yes", "y"]:
                 self.verbose = True
             elif verbose_env_lower in ["false", "0", "no", "n"]:
@@ -246,7 +246,7 @@ class API:
                 return None
 
             if not response.ok:
-                self._log("warning", LogEmoji.WARNING, f"向 {url} 发起的请求失败，状态码 {response.status_code}。响应内容: {response.text}", force=True)
+                self._log("warning", LogEmoji.WARNING, f"向 {url} 发起的请求失败，状态码 {response.status_code}。", force=True)
                 return None
             return response
         except requests.exceptions.RequestException as e:
@@ -497,6 +497,7 @@ class Checker:
             checkin_result = api.checkin(cookie)
             result.status = checkin_result["status"]
             result.code = checkin_result.get("code", CheckinStatus.FAILURE)
+            result.points = str(checkin_result.get("points", "0"))
 
             if result.code == CheckinStatus.FAILURE:
                 return result
